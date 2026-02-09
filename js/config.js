@@ -1,19 +1,21 @@
 // Simulation parameters
 export const SIM = {
-  windStrength: 50,
-  turbulence: 35,
-  windAngle: 0,
-  stiffness: 55,
-  damping: 94,
+  windStrength: 36,
+  turbulence: 30,
+  windAngle: 90,
+  windDrift: 24,
+  stiffness: 40,
+  damping: 92,
   opacity: 1.0,
   flagColor: [0.91, 0.90, 0.89],
-  gravity: -3.5,
-  stretch: 50,
+  gravity: -7.9,
+  stretch: 10,
+  zoom: 100,
 };
 
 // Cloth grid dimensions
-export const cols = 120;
-export const rows = 69;
+export const cols = 112;
+export const rows = 64;
 export const totalPts = cols * rows;
 export const flagW = 3.0;
 export const flagH = flagW / 1.75;
@@ -25,4 +27,5 @@ export const restDiag = Math.sqrt(restDx * restDx + restDy * restDy);
 export const state = {
   viewMode: 'fullscreen',
   theme: 'dark',
+  pinMode: 'poleDense',
 };

@@ -23,16 +23,17 @@ uniform bool uHasTex;
 void main() {
   vec3 n = normalize(vNrm) * uFace;
   vec3 vd = normalize(uEye - vPos);
+  vec3 ld = normalize(uLight);
+  vec3 hd = normalize(ld + vd);
 
-  float diff = max(dot(n, uLight), 0.0) * 0.55;
-  float fill = max(dot(n, normalize(vec3(-0.5, 0.3, -0.6))), 0.0) * 0.18;
-  float rim = pow(1.0 - max(dot(n, vd), 0.0), 3.0) * 0.15;
-  vec3 hd = normalize(uLight + vd);
-  float spec = pow(max(dot(n, hd), 0.0), 160.0) * 0.30;
-  float spec2 = pow(max(dot(n, hd), 0.0), 32.0) * 0.08;
-  float wrap = max(0.0, (dot(n, uLight) + 0.35) / 1.35) * 0.10;
-
-  float light = uAmbient + diff + fill + rim + spec + spec2 + wrap;
+  float ndl = dot(n, ld);
+  float diff = max(ndl, 0.0) * 0.50;
+  float fill = max(dot(n, normalize(vec3(-0.45, 0.35, -0.65))), 0.0) * 0.14;
+  float back = max(-ndl, 0.0) * 0.20;
+  float rim = pow(1.0 - max(dot(n, vd), 0.0), 2.8) * 0.18;
+  float spec = pow(max(dot(n, hd), 0.0), 72.0) * 0.14;
+  float spec2 = pow(max(dot(n, hd), 0.0), 16.0) * 0.16;
+  float light = uAmbient + diff + fill + back + rim + spec + spec2;
 
   vec3 base = uColor;
   float alpha = uAlpha;
@@ -40,9 +41,13 @@ void main() {
     vec2 tc = vUV;
     if (uFace < 0.0) tc.x = 1.0 - tc.x;
     vec4 t = texture2D(uTex, tc);
-    base = mix(base, t.rgb, t.a);
-    alpha = mix(uAlpha, 1.0, t.a);
+    base = t.rgb + base * (uAlpha * (1.0 - t.a));
+    alpha = t.a + uAlpha * (1.0 - t.a);
   }
 
-  gl_FragColor = vec4(base * light, alpha);
+  float sheen = pow(1.0 - max(dot(n, vd), 0.0), 4.0) * 0.07;
+  vec3 sheenTint = mix(vec3(0.84, 0.90, 0.98), vec3(0.98, 0.90, 0.84), vUV.y);
+  vec3 lit = base * light + sheenTint * sheen;
+
+  gl_FragColor = vec4(lit, alpha);
 }`;

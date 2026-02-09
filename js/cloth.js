@@ -68,8 +68,14 @@ const conR = new Float32Array(cR);
 // Moving blobs of wind that drift across the flag surface.
 // Each gust has a position in UV space, velocity, radius, and force.
 // This creates organic, non-periodic large-scale turbulence.
-const NUM_GUSTS = 10;
+const NUM_GUSTS = 9;
+const GUST_SPEED_LIMIT = 0.55;
+const GUST_FORCE_LIMIT = 3.4;
+const GUST_PHASE_SPEED_LIMIT = 5.2;
 const gusts = [];
+const gustPulse = new Float32Array(NUM_GUSTS);
+const gustSwirl = new Float32Array(NUM_GUSTS);
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 function initGusts() {
   gusts.length = 0;
@@ -77,11 +83,15 @@ function initGusts() {
     gusts.push({
       x: Math.random() * 1.4 - 0.2,
       y: Math.random() * 1.4 - 0.2,
-      vx: (Math.random() - 0.5) * 0.18,
-      vy: (Math.random() - 0.5) * 0.12,
-      r: 0.15 + Math.random() * 0.35,
-      sx: (Math.random() - 0.5) * 2.0,
-      sz: (Math.random() - 0.5) * 2.0,
+      vx: (Math.random() - 0.5) * 0.28,
+      vy: (Math.random() - 0.5) * 0.20,
+      r: 0.10 + Math.random() * 0.26,
+      sx: (Math.random() - 0.5) * 2.8,
+      sz: (Math.random() - 0.5) * 2.8,
+      phase: Math.random() * Math.PI * 2.0,
+      phaseVel: 1.2 + Math.random() * 2.6,
+      pulse: 0.35 + Math.random() * 1.45,
+      spin: (Math.random() < 0.5 ? -1 : 1) * (0.9 + Math.random() * 1.4),
     });
   }
 }
@@ -100,58 +110,104 @@ function updateGusts(dt) {
     if (g.y > 1.5) g.y -= 2.0;
 
     // Random walk on velocity (smooth acceleration changes)
-    g.vx += (Math.random() - 0.5) * dt * 0.6;
-    g.vy += (Math.random() - 0.5) * dt * 0.4;
-    g.vx *= 0.995;
-    g.vy *= 0.995;
+    g.vx += (Math.random() - 0.5) * dt * 0.9;
+    g.vy += (Math.random() - 0.5) * dt * 0.7;
+    g.vx *= 0.993;
+    g.vy *= 0.993;
+    g.vx = clamp(g.vx, -GUST_SPEED_LIMIT, GUST_SPEED_LIMIT);
+    g.vy = clamp(g.vy, -GUST_SPEED_LIMIT, GUST_SPEED_LIMIT);
 
     // Random walk on strength (slow evolving push direction)
-    g.sx += (Math.random() - 0.5) * dt * 3.0;
-    g.sz += (Math.random() - 0.5) * dt * 3.0;
-    g.sx *= 0.99;
-    g.sz *= 0.99;
+    g.sx += (Math.random() - 0.5) * dt * 4.0;
+    g.sz += (Math.random() - 0.5) * dt * 4.0;
+    g.sx *= 0.987;
+    g.sz *= 0.987;
+    g.sx = clamp(g.sx, -GUST_FORCE_LIMIT, GUST_FORCE_LIMIT);
+    g.sz = clamp(g.sz, -GUST_FORCE_LIMIT, GUST_FORCE_LIMIT);
+
+    // Evolving gust "state" drives non-periodic flutter without global sine waves
+    g.phase += g.phaseVel * dt;
+    if (g.phase > Math.PI * 2.0) g.phase -= Math.PI * 2.0;
+    g.phaseVel += (Math.random() - 0.5) * dt * 1.5;
+    g.phaseVel = clamp(g.phaseVel, 0.7, GUST_PHASE_SPEED_LIMIT);
+    g.pulse += (Math.random() - 0.5) * dt * 1.8;
+    g.pulse = clamp(g.pulse, 0.15, 1.8);
   }
 }
 
 // ─── Physics simulation ─────────────────────────────────────────
+const SUBSTEPS = 2;
+let windAngleDrift = 0;
+let windAngleVel = 0;
+let windStrengthDrift = 0;
 let time = 0;
-const SUBSTEPS = 3;
+
+function updateAmbientWind(dt) {
+  const driftMax = SIM.windDrift;
+  if (driftMax <= 0.01) {
+    windAngleDrift *= Math.exp(-dt * 6.0);
+    windAngleVel *= Math.exp(-dt * 7.5);
+  } else {
+    windAngleVel += (Math.random() - 0.5) * dt * (26.0 + driftMax * 1.15);
+    windAngleVel += (-windAngleDrift * (1.15 + driftMax * 0.03)) * dt;
+    windAngleVel *= Math.exp(-dt * 1.9);
+    windAngleDrift += windAngleVel * dt;
+    windAngleDrift = clamp(windAngleDrift, -driftMax, driftMax);
+  }
+
+  windStrengthDrift += (Math.random() - 0.5) * dt * (1.1 + SIM.turbulence / 90);
+  windStrengthDrift *= Math.exp(-dt * 1.6);
+  windStrengthDrift = clamp(windStrengthDrift, -0.36, 0.36);
+}
+
+function applyStadiumPoleMotion() {
+  if (state.viewMode !== 'stadium') return;
+  // Original Stadium motion: horizontal figure-8 sweep on the pole edge.
+  for (let j = 0; j < rows; j++) {
+    const p = j * cols;
+    const i3 = p * 3;
+    const restY = -(j / (rows - 1)) * flagH + flagH * 0.5;
+    const vn = j / (rows - 1);
+    const phase = time * 1.4 + vn * 0.35;
+    const nx = 2.8 * Math.sin(phase);
+    const ny = restY + 0.25 * Math.sin(2 * phase);
+    const nz = 1.4 * Math.cos(phase);
+    pos[i3] = prev[i3] = nx;
+    pos[i3 + 1] = prev[i3 + 1] = ny;
+    pos[i3 + 2] = prev[i3 + 2] = nz;
+  }
+}
 
 export function simulate(frameDt) {
-  const dt = Math.min(Math.max(frameDt, 0.006), 0.02);
+  const dt = Math.min(Math.max(frameDt, 0.004), 0.016);
 
   // Update gust blobs once per frame (not per substep)
   updateGusts(dt);
+  updateAmbientWind(dt);
 
   const subDt = dt / SUBSTEPS;
 
   for (let s = 0; s < SUBSTEPS; s++) {
     const dt2 = subDt * subDt;
-    const damp = Math.pow(SIM.damping / 100, subDt * 60);
-    const windNorm = SIM.windStrength / 100;
-    const windBase = windNorm * windNorm * 30.0;
-    const turbAmt = SIM.turbulence / 100;
-    const aRad = SIM.windAngle * Math.PI / 180;
-    const wdx = Math.sin(aRad), wdz = Math.cos(aRad);
-    // Softer constraints = more wrinkles (silk-like drape)
-    const iterations = Math.floor(SIM.stiffness / 100 * 3) + 3;
-
     time += subDt;
+    const damp = Math.pow(SIM.damping / 100, subDt * 85);
+    const windNorm = clamp((SIM.windStrength / 100) * (1.0 + windStrengthDrift), 0, 1.6);
+    const windBase = windNorm * windNorm * 24.0 + windNorm * 2.5;
+    const turbAmt = SIM.turbulence / 100;
+    const aRad = (SIM.windAngle + windAngleDrift) * Math.PI / 180;
+    const wdx = Math.sin(aRad), wdz = Math.cos(aRad);
+    const iterations = Math.floor(SIM.stiffness / 100 * 2) + 2;
+    const solveStrength = 0.5 + (SIM.stiffness / 100) * 0.3;
+    const dragK = 0.012 + (1.0 - SIM.damping / 100) * 0.62 + windNorm * 0.01;
+    const maxStep = Math.max(restDx, restDy) * (1.3 + windNorm * 0.9);
 
-    // Stadium: figure-8 pinned column sweep
-    if (state.viewMode === 'stadium') {
-      for (let j = 0; j < rows; j++) {
-        const p = j * cols;
-        const i3 = p * 3;
-        const restY = -(j / (rows - 1)) * flagH + flagH * 0.5;
-        const vn = j / (rows - 1);
-        const phase = time * 1.4 + vn * 0.35;
-        const nx = 2.8 * Math.sin(phase);
-        const ny = restY + 0.25 * Math.sin(2 * phase);
-        const nz = 1.4 * Math.cos(phase);
-        pos[i3] = nx; pos[i3 + 1] = ny; pos[i3 + 2] = nz;
-        prev[i3] = nx; prev[i3 + 1] = ny; prev[i3 + 2] = nz;
-      }
+    applyStadiumPoleMotion();
+
+    // Evaluate per-gust phase once per substep (faster than per-particle trig).
+    for (let g = 0; g < NUM_GUSTS; g++) {
+      const gust = gusts[g];
+      gustPulse[g] = (0.72 + Math.sin(gust.phase) * 0.28) * (0.42 + gust.pulse * 0.58);
+      gustSwirl[g] = gust.spin * (0.22 + 0.34 * Math.cos(gust.phase * 0.75));
     }
 
     // Verlet integration with forces
@@ -166,13 +222,12 @@ export function simulate(frameDt) {
 
       prev[i3] = px; prev[i3 + 1] = py; prev[i3 + 2] = pz;
 
-      const col = p % cols;
-      const row = (p / cols) | 0;
-      const u = col / (cols - 1);
-      const v = row / (rows - 1);
+      const uv2 = p * 2;
+      const u = uv[uv2];
+      const v = uv[uv2 + 1];
 
       // ── Gust blob turbulence (organic, non-periodic) ──
-      let gustX = 0, gustZ = 0;
+      let gustX = 0, gustZ = 0, gustLift = 0;
       for (let g = 0; g < NUM_GUSTS; g++) {
         const gust = gusts[g];
         const gdx = u - gust.x;
@@ -180,59 +235,108 @@ export function simulate(frameDt) {
         const d2 = gdx * gdx + gdy * gdy;
         const r2 = gust.r * gust.r;
         if (d2 < r2) {
-          // Smooth quadratic falloff
+          // Pressure + swirl from localized evolving gusts
           const w = 1.0 - d2 / r2;
           const w2 = w * w;
-          gustX += gust.sx * w2;
-          gustZ += gust.sz * w2;
+          const w3 = w2 * w;
+          const pulse = w2 * gustPulse[g];
+          const swirl = w3 * gustSwirl[g];
+          gustX += gust.sx * pulse - gdy * swirl;
+          gustZ += gust.sz * pulse + gdx * swirl;
+          // Keep vertical turbulence zero-mean so corners don't accumulate upward drift.
+          gustLift += swirl * 0.30 + (pulse - 0.50) * 0.10;
         }
       }
-
-      // ── Fine wrinkle detail (high-freq sine, too small to cause global oscillation) ──
-      const f1 = Math.sin(u * 22.0 + time * 1.3) * Math.cos(v * 16.0 + time * 1.1) * 0.3;
-      const f2 = Math.sin(v * 20.0 + time * 1.5) * Math.cos(u * 18.0 + time * 0.9) * 0.3;
-      const f3 = Math.cos(v * 25.0 + time * 1.2 + u * 20.0) * 0.2;
-      const uf1 = Math.sin(u * 35.0 + time * 1.8) * Math.cos(v * 30.0 + time * 1.4) * 0.15;
-      const uf2 = Math.cos(u * 40.0 + time * 2.1) * Math.sin(v * 38.0 + time * 1.7) * 0.1;
-
-      const fineX = (f1 + uf1 + uf2) * turbAmt * 3.5;
-      const fineY = f2 * turbAmt * 0.8;
-      const fineZ = (f3 + uf1 * 0.5) * turbAmt * 4.0;
 
       // ── Compose forces ──
       const wm = 0.3 + u * 0.7;
-      const gustScale = turbAmt * (windBase * 0.25 + 0.5);
+      const gustScale = turbAmt * (windBase * 0.34 + 0.85);
 
       let fx = wdx * windBase * wm
-        + gustX * gustScale
-        + fineX * (windBase * 0.15 + 0.2);
-      let fy = SIM.gravity * (1.0 + v * 0.3)
-        + fineY * (windBase * 0.06 + 0.1);
+        + gustX * gustScale;
+      let fy = SIM.gravity * (1.0 + v * 0.62 + u * u * 0.22)
+        + gustLift * gustScale * 0.045;
       let fz = wdz * windBase * wm
-        + gustZ * gustScale
-        + fineZ * (windBase * 0.15 + 0.2);
+        + gustZ * gustScale;
 
-      // Tiny random jitter — invisible, but breaks resonance/equilibrium
-      fx += (Math.random() - 0.5) * 0.015;
-      fz += (Math.random() - 0.5) * 0.015;
+      // Normal-aligned aerodynamic pressure makes folds self-excite dynamically.
+      const npx = nrm[i3];
+      const npy = nrm[i3 + 1];
+      const npz = nrm[i3 + 2];
+      const nLen2 = npx * npx + npy * npy + npz * npz;
+      if (nLen2 > 1e-4) {
+        const ndw = npx * wdx + npz * wdz + npy * 0.05;
+        const aero = ndw * Math.abs(ndw) * (windBase * (0.75 + turbAmt * 0.55)) * (0.2 + u * 0.8);
+        fx += npx * aero;
+        fy += npy * aero * 0.24;
+        fz += npz * aero;
+      }
+
+      // Relative airflow drag removes runaway oscillation over long runs.
+      const velX = vx / subDt;
+      const velY = vy / subDt;
+      const velZ = vz / subDt;
+      const flowX = wdx * windBase * (0.35 + u * 0.65);
+      const flowZ = wdz * windBase * (0.35 + u * 0.65);
+      const relX = velX - flowX;
+      const relY = velY;
+      const relZ = velZ - flowZ;
+      if (u > 0.35 && velY > 0.0) {
+        fy -= velY * (0.016 + u * 0.028);
+      }
+      const drag = dragK * (0.25 + u * 0.75);
+      fx -= relX * drag;
+      fy -= relY * drag * 0.8;
+      fz -= relZ * drag;
 
       // Fullscreen: edge springs pull toward rest position
       if (state.viewMode === 'fullscreen') {
-        const stretch = SIM.stretch / 100;
+        const stretchN = clamp(SIM.stretch / 140, 0, 1);
+        const stretchTaut = Math.pow(stretchN, 1.35);
         const restX = u * flagW;
         const restY = -(v) * flagH + flagH * 0.5;
+        const sag = flagH * (0.015 + 0.105 * u * u * (0.45 + 0.55 * (1.0 - v)));
+        const targetY = restY - sag;
+        // Base hold keeps framing stable; stretch adds controllable tautness.
+        const holdY = (2.4 + u * 1.6) + stretchTaut * (6.8 + u * 5.6);
+        const holdXZ = (0.62 + u * 0.35) + stretchTaut * (2.6 + u * 2.2);
+        fx += (restX - px) * holdXZ;
+        fy += (targetY - py) * holdY;
+        fz += (0 - pz) * holdXZ * 0.22;
+
+        // Trailing edge anti-float: when a point rises above its rest height, push it back down.
+        const above = py - targetY;
+        if (above > 0.0) {
+          const sink = (1.8 + u * 5.4) * (1.0 + above * 0.95);
+          fy -= above * sink;
+          if (velY > 0.0) fy -= velY * (0.030 + u * 0.070);
+        }
+
         const edgeDist = Math.min(u, 1 - u, v, 1 - v);
-        const springK = stretch * 200.0 * Math.max(0, 1.0 - edgeDist * 4.0);
+        const springK = stretchTaut * 210.0 * Math.max(0, 1.0 - edgeDist * 4.0);
         if (springK > 0.01) {
           fx += (restX - px) * springK;
-          fy += (restY - py) * springK;
-          fz += (0 - pz) * springK * 0.3;
+          fy += (targetY - py) * springK;
+          fz += (0 - pz) * springK * 0.16;
         }
       }
 
-      pos[i3] = px + vx + fx * dt2;
-      pos[i3 + 1] = py + vy + fy * dt2;
-      pos[i3 + 2] = pz + vz + fz * dt2;
+      let nx = px + vx + fx * dt2;
+      let ny = py + vy + fy * dt2;
+      let nz = pz + vz + fz * dt2;
+
+      const sx = nx - px, sy = ny - py, sz = nz - pz;
+      const stepLen = Math.sqrt(sx * sx + sy * sy + sz * sz);
+      if (stepLen > maxStep) {
+        const sInv = maxStep / stepLen;
+        nx = px + sx * sInv;
+        ny = py + sy * sInv;
+        nz = pz + sz * sInv;
+      }
+
+      pos[i3] = nx;
+      pos[i3 + 1] = ny;
+      pos[i3 + 2] = nz;
     }
 
     // Constraint solving
@@ -243,7 +347,7 @@ export function simulate(frameDt) {
         const dx = pos[b3] - pos[a3], dy = pos[b3 + 1] - pos[a3 + 1], dz = pos[b3 + 2] - pos[a3 + 2];
         const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (dist < 1e-7) continue;
-        const diff = (dist - conR[c]) / dist * 0.5;
+        const diff = (dist - conR[c]) / dist * 0.5 * solveStrength;
         const cx = dx * diff, cy = dy * diff, cz = dz * diff;
         const af = fixed[a], bf = fixed[b];
         if (!af && !bf) {

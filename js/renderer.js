@@ -45,29 +45,61 @@ const idxBuf = gl.createBuffer();
 
 gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
 gl.bufferData(gl.ARRAY_BUFFER, uv, gl.STATIC_DRAW);
+
+gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+gl.bufferData(gl.ARRAY_BUFFER, pos.byteLength, gl.DYNAMIC_DRAW);
+gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf);
+gl.bufferData(gl.ARRAY_BUFFER, nrm.byteLength, gl.DYNAMIC_DRAW);
+
 gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
 gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indexData, gl.STATIC_DRAW);
 
 // ─── Texture ────────────────────────────────────────────────────
 let flagTex = null;
+let texSource = null;
+let texIsVideo = false;
 export let hasTex = false;
 
-export function loadTexture(img) {
-  if (flagTex) gl.deleteTexture(flagTex);
-  flagTex = gl.createTexture();
+function uploadTextureFrame() {
+  if (!flagTex || !texSource) return false;
+  if (texIsVideo && texSource.readyState < texSource.HAVE_CURRENT_DATA) return false;
+
   gl.bindTexture(gl.TEXTURE_2D, flagTex);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, texSource);
+  return true;
+}
+
+export function loadTexture(source, { isVideo = false } = {}) {
+  if (flagTex) gl.deleteTexture(flagTex);
+  texSource = source;
+  texIsVideo = isVideo;
+  flagTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, flagTex);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texImage2D(
+    gl.TEXTURE_2D,
+    0,
+    gl.RGBA,
+    1,
+    1,
+    0,
+    gl.RGBA,
+    gl.UNSIGNED_BYTE,
+    new Uint8Array([0, 0, 0, 0]),
+  );
+  uploadTextureFrame();
   hasTex = true;
 }
 
 export function removeTexture() {
   if (flagTex) { gl.deleteTexture(flagTex); flagTex = null; }
+  texSource = null;
+  texIsVideo = false;
   hasTex = false;
 }
 
@@ -144,6 +176,7 @@ export function render() {
   gl.uniform1f(loc.uAmbient, state.theme === 'light' ? 0.38 : 0.22);
 
   if (hasTex && flagTex) {
+    if (texIsVideo) uploadTextureFrame();
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, flagTex);
     gl.uniform1i(loc.uTex, 0);
@@ -154,12 +187,12 @@ export function render() {
 
   // Upload dynamic buffers
   gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
-  gl.bufferData(gl.ARRAY_BUFFER, pos, gl.DYNAMIC_DRAW);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, pos);
   gl.enableVertexAttribArray(loc.aPos);
   gl.vertexAttribPointer(loc.aPos, 3, gl.FLOAT, false, 0, 0);
 
   gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf);
-  gl.bufferData(gl.ARRAY_BUFFER, nrm, gl.DYNAMIC_DRAW);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, nrm);
   gl.enableVertexAttribArray(loc.aNrm);
   gl.vertexAttribPointer(loc.aNrm, 3, gl.FLOAT, false, 0, 0);
 
